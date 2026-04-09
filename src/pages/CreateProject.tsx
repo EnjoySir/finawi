@@ -130,8 +130,8 @@ export default function CreateProject() {
     e.preventDefault();
     if (!user) { toast({ title: "Authentication Required", variant: "destructive" }); return; }
 
-    if (!formData.department || !formData.category) {
-      toast({ title: "Missing Fields", description: "Department and category are required.", variant: "destructive" });
+    if (!formData.department) {
+      toast({ title: "Missing Fields", description: "Department is required.", variant: "destructive" });
       return;
     }
 
@@ -154,9 +154,9 @@ export default function CreateProject() {
       if (resubmitId) {
         const { error } = await supabase.from('projects').update({
           title: formData.title, description: formData.description, objectives: formData.objectives,
-          department: formData.department, category: formData.category,
+          department: formData.department,
           status: 'pending', rejection_reason: null,
-        } as any).eq('id', resubmitId);
+        }).eq('id', resubmitId);
         if (error) throw error;
         try {
           const { data: allocData } = await supabase.functions.invoke('smart-allocation', { body: { action: 'auto_allocate_project', projectId: resubmitId } });
@@ -167,11 +167,11 @@ export default function CreateProject() {
       } else {
         const { data: project, error } = await supabase.from('projects').insert({
           title: formData.title, description: formData.description, objectives: formData.objectives,
-          student_id: user.id, department: formData.department, category: formData.category,
+          student_id: user.id, department: formData.department,
           status: isFinished ? 'completed' : 'pending',
           similarity_score: duplicateResult?.highestSimilarity || 0,
           is_duplicate: false,
-        } as any).select().single();
+        }).select().single();
         if (error) throw error;
         if (!isFinished && project) {
           try {
