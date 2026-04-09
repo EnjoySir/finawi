@@ -50,6 +50,18 @@ interface DuplicateCheckResult {
   highestSimilarity: number;
 }
 
+const normalizeCategory = (value: string) => value.trim().toLowerCase();
+
+const getStoredCategory = (project: { keywords?: string[] | null }) => {
+  const keywords = project.keywords || [];
+  return PROJECT_CATEGORIES.find((category) =>
+    keywords.some((keyword) => normalizeCategory(keyword) === normalizeCategory(category))
+  ) || "";
+};
+
+const buildProjectKeywords = (category: string) =>
+  category.trim() ? [category.trim()] : [];
+
 export default function CreateProject() {
   const { user } = useAuth();
   const navigate = useNavigate();
@@ -81,7 +93,7 @@ export default function CreateProject() {
             objectives: data.objectives || '',
             description: data.description,
             department: data.department || '',
-            category: (data as any).category || '',
+            category: getStoredCategory(data),
           });
           setResubmitFeedback(data.rejection_reason);
         }
@@ -130,8 +142,8 @@ export default function CreateProject() {
     e.preventDefault();
     if (!user) { toast({ title: "Authentication Required", variant: "destructive" }); return; }
 
-    if (!formData.department) {
-      toast({ title: "Missing Fields", description: "Department is required.", variant: "destructive" });
+    if (!formData.department || !formData.category) {
+      toast({ title: "Missing Fields", description: "Department and category are required.", variant: "destructive" });
       return;
     }
 
@@ -154,7 +166,7 @@ export default function CreateProject() {
       if (resubmitId) {
         const { error } = await supabase.from('projects').update({
           title: formData.title, description: formData.description, objectives: formData.objectives,
-          department: formData.department,
+          department: formData.department, keywords: buildProjectKeywords(formData.category),
           status: 'pending', rejection_reason: null,
         }).eq('id', resubmitId);
         if (error) throw error;
@@ -168,6 +180,7 @@ export default function CreateProject() {
         const { data: project, error } = await supabase.from('projects').insert({
           title: formData.title, description: formData.description, objectives: formData.objectives,
           student_id: user.id, department: formData.department,
+          keywords: buildProjectKeywords(formData.category),
           status: isFinished ? 'completed' : 'pending',
           similarity_score: duplicateResult?.highestSimilarity || 0,
           is_duplicate: false,
