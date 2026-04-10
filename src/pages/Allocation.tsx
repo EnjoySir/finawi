@@ -225,10 +225,13 @@ export default function Allocation() {
       const profileMap = new Map(Object.values(allProfiles).map(p => [p.user_id, p]));
 
       // Build supervisors with profiles
-      const supervisorsWithProfiles = (supervisorRes.data || []).map(sup => ({
-        ...sup,
-        profiles: profileMap.get(sup.user_id) || { user_id: sup.user_id, full_name: '' }
-      }));
+      const supervisorsWithProfiles = (supervisorRes.data || []).map(sup => {
+        const p = profileMap.get(sup.user_id);
+        return {
+          ...sup,
+          profiles: { user_id: sup.user_id, full_name: p?.full_name || '', email: p?.email || '' }
+        };
+      });
       setSupervisors(supervisorsWithProfiles);
 
       // Build pending allocations with project + student profile
