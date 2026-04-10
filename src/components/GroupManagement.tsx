@@ -137,6 +137,8 @@ export default function GroupManagement() {
     finally { setGpSubmitting(false); }
   };
 
+  useEffect(() => { fetchData(); }, []);
+
   const fetchData = async () => {
     try {
       const { data: { user } } = await supabase.auth.getUser();
