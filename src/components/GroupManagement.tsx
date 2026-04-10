@@ -70,7 +70,72 @@ export default function GroupManagement() {
   const [editMemberName, setEditMemberName] = useState("");
   const [editMemberRegNumber, setEditMemberRegNumber] = useState("");
 
-  useEffect(() => { fetchData(); }, []);
+  // Group project submission state
+  const [projectDialogGroupId, setProjectDialogGroupId] = useState<string | null>(null);
+  const [gpForm, setGpForm] = useState({ title: "", objectives: "", description: "", department: "", category: "" });
+  const [gpChecking, setGpChecking] = useState(false);
+  const [gpDuplicateResult, setGpDuplicateResult] = useState<any>(null);
+  const [gpDuplicateChecked, setGpDuplicateChecked] = useState(false);
+  const [gpSubmitting, setGpSubmitting] = useState(false);
+
+  useEffect(() => { setGpDuplicateChecked(false); setGpDuplicateResult(null); }, [gpForm.title, gpForm.objectives, gpForm.description]);
+
+  const handleGroupDuplicateCheck = async () => {
+    if (!gpForm.title.trim() || !gpForm.objectives.trim() || !gpForm.description.trim()) {
+      toast({ title: "Missing Info", description: "Title, objectives, and description are required.", variant: "destructive" }); return;
+    }
+    setGpChecking(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('check-duplicate', {
+        body: { title: gpForm.title, objectives: gpForm.objectives, description: gpForm.description }
+      });
+      if (error) throw error;
+      setGpDuplicateResult(data);
+      setGpDuplicateChecked(true);
+      if (data.isDuplicate) {
+        toast({ title: "Similar Projects Found", description: "Too similar to existing projects. Please modify.", variant: "destructive" });
+      } else {
+        toast({ title: "No Duplicates Found", description: "You can proceed to submit." });
+      }
+    } catch (error: any) { toast({ title: "Check Failed", description: error.message, variant: "destructive" }); }
+    finally { setGpChecking(false); }
+  };
+
+  const handleGroupProjectSubmit = async () => {
+    if (!projectDialogGroupId) return;
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) { toast({ title: "Not authenticated", variant: "destructive" }); return; }
+    if (!gpForm.title.trim() || !gpForm.objectives.trim() || !gpForm.description.trim() || !gpForm.department.trim() || !gpForm.category) {
+      toast({ title: "All fields required", variant: "destructive" }); return;
+    }
+    if (!gpDuplicateChecked) {
+      toast({ title: "Run similarity check first", variant: "destructive" }); return;
+    }
+    if (gpDuplicateResult?.isDuplicate) {
+      toast({ title: "Submission Blocked", description: "Too similar to existing projects.", variant: "destructive" }); return;
+    }
+    setGpSubmitting(true);
+    try {
+      const { data: project, error } = await supabase.from('projects').insert({
+        title: gpForm.title, description: gpForm.description, objectives: gpForm.objectives,
+        student_id: user.id, department: gpForm.department,
+        keywords: gpForm.category.trim() ? [gpForm.category.trim()] : [],
+        status: 'pending',
+        similarity_score: gpDuplicateResult?.highestSimilarity || 0,
+        is_duplicate: false,
+      }).select().single();
+      if (error) throw error;
+      // Smart allocation
+      try {
+        await supabase.functions.invoke('smart-allocation', { body: { action: 'auto_allocate_project', projectId: project.id } });
+      } catch (e) { console.error('Auto-allocation failed:', e); }
+      toast({ title: "Group Project Submitted!", description: "Matched supervisor will be notified." });
+      setProjectDialogGroupId(null);
+      setGpForm({ title: "", objectives: "", description: "", department: "", category: "" });
+      setGpDuplicateResult(null); setGpDuplicateChecked(false);
+    } catch (error: any) { toast({ title: "Failed", description: error.message, variant: "destructive" }); }
+    finally { setGpSubmitting(false); }
+  };
 
   const fetchData = async () => {
     try {
