@@ -13,7 +13,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
-import { Users, Plus, Loader2, Check, X, Sparkles, Trash2, Mail, Phone, Clock, MapPin, Building2 } from "lucide-react";
+import { Users, Plus, Loader2, Check, X, Sparkles, Trash2, Mail, Phone, Clock, MapPin, Building2, Search, Shield, AlertTriangle, CheckCircle, FileText } from "lucide-react";
 import MilestoneProgress from "./MilestoneProgress";
 
 interface Student {
