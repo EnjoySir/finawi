@@ -3,6 +3,7 @@ import { supabase } from "@/integrations/supabase/client";
 export interface ProjectPerson {
   user_id: string;
   full_name: string | null;
+  email?: string | null;
   department?: string | null;
 }
 

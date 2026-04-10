@@ -46,7 +46,7 @@ serve(async (req) => {
     const adminClient = createClient(supabaseUrl, supabaseServiceKey);
     const { data, error } = await adminClient
       .from("profiles")
-      .select("user_id, full_name, department")
+      .select("user_id, full_name, email, department")
       .in("user_id", uniqueUserIds);
 
     if (error) throw error;
