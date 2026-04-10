@@ -710,10 +710,15 @@ export default function GroupManagement() {
                     </Dialog>
                   </div>
                 )}
-                <div className="flex gap-2">
+                <div className="flex gap-2 flex-wrap">
+                  {(userType === 'student' || userType === 'admin') && (
+                    <Button onClick={() => setProjectDialogGroupId(group.id)} variant="outline" className="flex-1" size="sm">
+                      <FileText className="h-4 w-4 mr-2" />Submit Project
+                    </Button>
+                  )}
                   {(userType === 'student' || userType === 'admin') && (
                     <Button onClick={() => handleAllocateGroup(group.id)} className="flex-1" size="sm">
-                      <Sparkles className="h-4 w-4 mr-2" />Allocate to Supervisor
+                      <Sparkles className="h-4 w-4 mr-2" />Allocate
                     </Button>
                   )}
                   {(userType === 'student' || userType === 'admin' || userType === 'supervisor') && (
