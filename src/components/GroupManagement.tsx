@@ -15,6 +15,14 @@ import {
 import { Label } from "@/components/ui/label";
 import { Users, Plus, Loader2, Check, X, Sparkles, Trash2, Mail, Phone, Clock, MapPin, Building2, Search, Shield, AlertTriangle, CheckCircle, FileText } from "lucide-react";
 import MilestoneProgress from "./MilestoneProgress";
+import { Progress } from "@/components/ui/progress";
+
+const PROJECT_CATEGORIES = [
+  "Artificial Intelligence", "Machine Learning", "Web Development", "Mobile Development",
+  "IoT (Internet of Things)", "Cybersecurity", "Data Science", "Cloud Computing",
+  "Blockchain", "Robotics", "Software Engineering", "Networking", "Embedded Systems",
+  "Game Development", "Other",
+];
 
 interface Student {
   id: string;
