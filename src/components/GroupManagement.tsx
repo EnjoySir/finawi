@@ -638,10 +638,7 @@ export default function GroupManagement() {
           <Card className="border-dashed">
             <CardContent className="flex flex-col items-center justify-center py-8">
               <Users className="h-12 w-12 text-muted-foreground mb-4" />
-              <p className="text-muted-foreground mb-4">You haven't created any groups yet</p>
-              <Button onClick={() => setCreateDialogOpen(true)}>
-                <Plus className="h-4 w-4 mr-2" />Create Your First Group
-              </Button>
+              <p className="text-muted-foreground mb-4">You haven't created any groups yet. Click "Create Group" above to get started.</p>
             </CardContent>
           </Card>
         )}
