@@ -295,6 +295,11 @@ export default function CreateProject() {
                 <Textarea value={formData.description} onChange={e => setFormData({ ...formData, description: e.target.value })} placeholder="Describe methodology and expected outcomes..." rows={5} required />
               </div>
 
+              <div className="flex justify-end">
+                <Button type="button" variant="outline" size="sm" onClick={() => setFormData({ title: "", objectives: "", description: "", department: "", category: "" })}>
+                  Clear All Fields
+                </Button>
+              </div>
 
               {/* Duplicate Check Section */}
               {!isFinished && !resubmitId && (
