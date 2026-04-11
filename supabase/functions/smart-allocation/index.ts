@@ -105,6 +105,13 @@ function expandSynonyms(label: string): string[] {
   return [...new Set(results)];
 }
 
+/** Extract the project category from keywords array */
+function getProjectCategory(project: any): string {
+  const keywords = project.keywords || [];
+  if (keywords.length > 0) return keywords[0];
+  return '';
+}
+
 function researchAreaMatchesCategory(category: string, researchArea: string): boolean {
   const normalizedCategory = normalizeLabel(category);
   const normalizedArea = normalizeLabel(researchArea);
@@ -1525,9 +1532,10 @@ serve(async (req) => {
     throw new Error('Invalid action');
 
   } catch (error) {
-    console.error('Error:', error);
+    const message = error instanceof Error ? error.message : typeof error === 'string' ? error : JSON.stringify(error) || 'Unknown error';
+    console.error('Error:', message, error);
     return new Response(
-      JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown error' }),
+      JSON.stringify({ error: message }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 400 }
     );
   }
