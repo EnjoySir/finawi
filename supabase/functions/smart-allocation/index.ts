@@ -50,6 +50,36 @@ function ngramSimilarity(a: string, b: string): number {
   return union === 0 ? 0 : intersection / union;
 }
 
+// Synonym groups: any term in the same group should match any other
+const CATEGORY_SYNONYMS: string[][] = [
+  ['iot', 'internet of things', 'smart devices', 'embedded iot', 'sensor networks'],
+  ['ai', 'artificial intelligence', 'intelligent systems', 'expert systems'],
+  ['ml', 'machine learning', 'deep learning', 'neural networks', 'predictive modeling'],
+  ['web development', 'web dev', 'frontend', 'backend', 'full stack', 'fullstack', 'web applications', 'web app'],
+  ['mobile development', 'mobile dev', 'android', 'ios', 'mobile app', 'mobile applications', 'flutter', 'react native'],
+  ['cybersecurity', 'cyber security', 'information security', 'network security', 'ethical hacking', 'penetration testing', 'infosec'],
+  ['data science', 'data analytics', 'big data', 'data mining', 'data analysis', 'statistical analysis'],
+  ['cloud computing', 'cloud', 'aws', 'azure', 'gcp', 'cloud infrastructure', 'saas', 'paas', 'iaas', 'devops'],
+  ['blockchain', 'distributed ledger', 'smart contracts', 'cryptocurrency', 'web3', 'defi'],
+  ['robotics', 'autonomous systems', 'robot', 'automation', 'mechatronics'],
+  ['software engineering', 'software development', 'software design', 'sdlc', 'agile', 'software architecture'],
+  ['networking', 'computer networks', 'network engineering', 'telecommunications', 'network administration'],
+  ['embedded systems', 'embedded', 'microcontroller', 'fpga', 'firmware', 'real time systems', 'rtos'],
+  ['game development', 'game dev', 'game design', 'unity', 'unreal', 'game programming', 'gaming'],
+  ['nlp', 'natural language processing', 'text mining', 'computational linguistics', 'language models'],
+  ['computer vision', 'image processing', 'image recognition', 'object detection', 'visual computing'],
+  ['database', 'dbms', 'database management', 'sql', 'nosql', 'data modeling'],
+];
+
+/** Build a lookup: normalized term → set of all synonyms in its group */
+const synonymLookup = new Map<string, Set<string>>();
+for (const group of CATEGORY_SYNONYMS) {
+  const termSet = new Set(group);
+  for (const term of group) {
+    synonymLookup.set(term, termSet);
+  }
+}
+
 function normalizeLabel(value: string): string {
   return value
     .toLowerCase()
@@ -58,16 +88,21 @@ function normalizeLabel(value: string): string {
     .trim();
 }
 
-function getProjectCategory(project: any): string {
-  if (typeof project?.category === 'string' && project.category.trim()) {
-    return project.category.trim();
+/** Expand a label into itself + all synonym variants */
+function expandSynonyms(label: string): string[] {
+  const normalized = normalizeLabel(label);
+  const results = [normalized];
+  // Check full label
+  if (synonymLookup.has(normalized)) {
+    for (const syn of synonymLookup.get(normalized)!) results.push(syn);
   }
-
-  if (Array.isArray(project?.keywords) && project.keywords.length > 0) {
-    return String(project.keywords[0] || '').trim();
+  // Check each word (for abbreviations like "IoT", "AI", "ML")
+  for (const word of normalized.split(' ')) {
+    if (synonymLookup.has(word)) {
+      for (const syn of synonymLookup.get(word)!) results.push(syn);
+    }
   }
-
-  return '';
+  return [...new Set(results)];
 }
 
 function researchAreaMatchesCategory(category: string, researchArea: string): boolean {
@@ -75,13 +110,26 @@ function researchAreaMatchesCategory(category: string, researchArea: string): bo
   const normalizedArea = normalizeLabel(researchArea);
 
   if (!normalizedCategory || !normalizedArea) return false;
+
+  // Direct substring match
   if (normalizedArea.includes(normalizedCategory) || normalizedCategory.includes(normalizedArea)) return true;
 
-  const categoryTerms = normalizedCategory.split(' ').filter(term => term.length > 2);
-  const areaTerms = normalizedArea.split(' ').filter(term => term.length > 2);
-
+  // Term-level match
+  const categoryTerms = normalizedCategory.split(' ').filter(term => term.length > 1);
+  const areaTerms = normalizedArea.split(' ').filter(term => term.length > 1);
   if (categoryTerms.some(term => areaTerms.includes(term))) return true;
 
+  // Synonym expansion: check if category and area share a synonym group
+  const categoryExpanded = expandSynonyms(category);
+  const areaExpanded = expandSynonyms(researchArea);
+  for (const ce of categoryExpanded) {
+    for (const ae of areaExpanded) {
+      if (ce === ae) return true;
+      if (ce.includes(ae) || ae.includes(ce)) return true;
+    }
+  }
+
+  // Fuzzy fallback
   return ngramSimilarity(normalizedArea, normalizedCategory) > 0.45;
 }
 
