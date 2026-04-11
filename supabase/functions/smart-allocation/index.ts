@@ -329,6 +329,18 @@ function emptyScoreResult(reason = 'No expertise match'): ScoringResult {
   };
 }
 
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === 'string') return error;
+
+  try {
+    const serialized = JSON.stringify(error);
+    return serialized && serialized !== '{}' ? serialized : 'Unknown error';
+  } catch {
+    return 'Unknown error';
+  }
+}
+
 /**
  * Modern multi-factor scoring for project-supervisor matching.
  * Weights: TF-IDF (35%) | Keywords (25%) | Fuzzy (10%) | Department (15%) | Workload (15%)
@@ -943,174 +955,208 @@ serve(async (req) => {
     if (action === 'auto_allocate_project') {
       console.log('Auto-allocating project:', projectId);
 
-      const { data: project, error: projectError } = await supabaseClient
-        .from('projects')
-        .select('*')
-        .eq('id', projectId)
-        .single();
+      const dbClient = adminClient;
+      let errorStage = 'load_project';
 
-      if (projectError) throw projectError;
+      try {
+        const { data: project, error: projectError } = await dbClient
+          .from('projects')
+          .select('*')
+          .eq('id', projectId)
+          .single();
 
-      const { data: supervisorsData, error: supervisorsError } = await supabaseClient
-        .from('supervisors')
-        .select('*');
-
-      if (supervisorsError) throw supervisorsError;
-
-      const { data: rules } = await supabaseClient
-        .from('allocation_rules')
-        .select('*');
-
-      const maxProjects = rules?.find(r => r.rule_name === 'max_projects_per_supervisor')?.rule_value || 5;
-
-      const { projectCategory, matchingSupervisors } = getMatchingSupervisors(project, supervisorsData || [], maxProjects);
-
-      await supabaseClient
-        .from('pending_allocations')
-        .delete()
-        .eq('project_id', projectId);
-
-      if (!projectCategory || matchingSupervisors.length === 0) {
-        // No supervisors available — notify admin for manual assignment
-        const { data: admins } = await supabaseClient
-          .from('profiles')
-          .select('user_id')
-          .eq('user_type', 'admin');
-
-        if (admins && admins.length > 0) {
-          for (const admin of admins) {
-            await supabaseClient.from('notifications').insert({
-              user_id: admin.user_id,
-              title: 'Manual Assignment Needed',
-              message: !projectCategory
-                ? `Project "${project.title}" is missing a category, so expertise-based allocation could not run. Please assign manually.`
-                : `Project "${project.title}" could not be auto-assigned because no supervisor matches the ${projectCategory} expertise. Please assign manually.`,
-              type: 'allocation',
-              link: `/projects/${projectId}`,
-            });
-          }
+        if (projectError) throw new Error(`Could not load project: ${projectError.message}`);
+        if (!project) {
+          return new Response(
+            JSON.stringify({ success: false, allocated: false, error: 'Project not found.' }),
+            { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
         }
 
-        return new Response(
-          JSON.stringify({ success: true, allocated: false, message: !projectCategory ? 'Project category is missing, so expertise matching could not run.' : 'No supervisor with matching expertise was found. Admin has been notified for manual assignment.' }),
-          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
-      }
+        errorStage = 'load_supervisors';
+        const { data: supervisorsData, error: supervisorsError } = await dbClient
+          .from('supervisors')
+          .select('*');
 
-      // Build TF-IDF for scoring
-      const projDoc = projectToDocument(project);
-      const supDocs = matchingSupervisors.map(s => supervisorToDocument(s));
-      const { vectors } = buildTfIdf([projDoc, ...supDocs]);
+        if (supervisorsError) throw new Error(`Could not load supervisors: ${supervisorsError.message}`);
 
-      const scoredMatches: any[] = [];
-      for (let si = 0; si < matchingSupervisors.length; si++) {
-        const supervisor = matchingSupervisors[si];
+        errorStage = 'load_rules';
+        const { data: rules, error: rulesError } = await dbClient
+          .from('allocation_rules')
+          .select('*');
 
-        const result = scoreMatch(
-          project, supervisor,
-          vectors[0], vectors[si + 1],
-          supervisor.current_projects || 0,
-          supervisor.max_projects || maxProjects
-        );
+        if (rulesError) throw new Error(`Could not load allocation rules: ${rulesError.message}`);
 
-        if (result.score > 0) {
-          scoredMatches.push({ supervisor, ...result });
-        }
-      }
+        const maxProjects = rules?.find(r => r.rule_name === 'max_projects_per_supervisor')?.rule_value || 5;
+        const { projectCategory, matchingSupervisors } = getMatchingSupervisors(project, supervisorsData || [], maxProjects);
 
-      if (scoredMatches.length === 0) {
-        const { data: admins } = await adminClient
-          .from('profiles')
-          .select('user_id')
-          .eq('user_type', 'admin');
-
-        if (admins && admins.length > 0) {
-          for (const admin of admins) {
-            await supabaseClient.from('notifications').insert({
-              user_id: admin.user_id,
-              title: 'Manual Assignment Needed',
-              message: `Project "${project.title}" matched the ${projectCategory} category, but no qualified supervisor with available capacity could be scored for routing. Please assign manually.`,
-              type: 'allocation',
-              link: `/projects/${projectId}`,
-            });
-          }
-        }
-
-        return new Response(
-          JSON.stringify({ success: true, allocated: false, message: 'No qualified supervisor with available capacity could be routed.' }),
-          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
-      }
-
-      scoredMatches.sort((a, b) => b.score - a.score);
-      const bestMatch = scoredMatches[0];
-
-      const supervisorIds = scoredMatches.map(({ supervisor }) => supervisor.user_id);
-      const { data: supervisorProfiles } = await adminClient
-        .from('profiles')
-        .select('user_id, full_name')
-        .in('user_id', supervisorIds);
-
-      const supervisorNameMap = new Map((supervisorProfiles || []).map((profile: any) => [profile.user_id, profile.full_name || 'Unknown supervisor']));
-      const supervisorNames = scoredMatches.map(({ supervisor }) => supervisorNameMap.get(supervisor.user_id) || 'Unknown supervisor');
-
-      const { error: allocError } = await supabaseClient
-        .from('pending_allocations')
-        .insert(scoredMatches.map((match) => ({
-          project_id: projectId,
-          supervisor_id: match.supervisor.user_id,
-          match_score: match.score,
-          match_reason: match.reasons.join(', '),
-          status: 'pending',
-        })));
-
-      if (allocError) throw allocError;
-
-      for (const match of scoredMatches) {
-        const supervisorName = supervisorNameMap.get(match.supervisor.user_id) || 'A matching supervisor';
-
-        await supabaseClient
+        errorStage = 'clear_previous_routes';
+        const { error: clearAllocationsError } = await dbClient
           .from('pending_allocations')
-          .update({
-            match_reason: `${match.reasons.join(', ')} • Routed for ${projectCategory}`,
-          });
+          .delete()
+          .eq('project_id', projectId);
 
-        await supabaseClient
+        if (clearAllocationsError) throw new Error(`Could not clear previous allocation routes: ${clearAllocationsError.message}`);
+
+        if (!projectCategory || matchingSupervisors.length === 0) {
+          errorStage = 'notify_admins_for_manual_assignment';
+          const { data: admins, error: adminsError } = await dbClient
+            .from('profiles')
+            .select('user_id')
+            .eq('user_type', 'admin');
+
+          if (adminsError) throw new Error(`Could not load admins for manual assignment: ${adminsError.message}`);
+
+          if (admins && admins.length > 0) {
+            const { error: adminNotificationError } = await dbClient.from('notifications').insert(
+              admins.map((admin) => ({
+                user_id: admin.user_id,
+                title: 'Manual Assignment Needed',
+                message: !projectCategory
+                  ? `Project "${project.title}" is missing a category, so expertise-based allocation could not run. Please assign manually.`
+                  : `Project "${project.title}" could not be auto-assigned because no supervisor matches the ${projectCategory} expertise. Please assign manually.`,
+                type: 'allocation',
+                link: `/projects/${projectId}`,
+              }))
+            );
+
+            if (adminNotificationError) throw new Error(`Could not notify admins: ${adminNotificationError.message}`);
+          }
+
+          return new Response(
+            JSON.stringify({ success: true, allocated: false, message: !projectCategory ? 'Project category is missing, so expertise matching could not run.' : 'No supervisor with matching expertise was found. Admin has been notified for manual assignment.' }),
+            { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
+
+        errorStage = 'score_matches';
+        const projDoc = projectToDocument(project);
+        const supDocs = matchingSupervisors.map(s => supervisorToDocument(s));
+        const { vectors } = buildTfIdf([projDoc, ...supDocs]);
+
+        const scoredMatches: any[] = [];
+        for (let si = 0; si < matchingSupervisors.length; si++) {
+          const supervisor = matchingSupervisors[si];
+
+          const result = scoreMatch(
+            project, supervisor,
+            vectors[0], vectors[si + 1],
+            supervisor.current_projects || 0,
+            supervisor.max_projects || maxProjects
+          );
+
+          if (result.score > 0) {
+            scoredMatches.push({ supervisor, ...result });
+          }
+        }
+
+        if (scoredMatches.length === 0) {
+          errorStage = 'notify_admins_no_scored_match';
+          const { data: admins, error: adminsError } = await dbClient
+            .from('profiles')
+            .select('user_id')
+            .eq('user_type', 'admin');
+
+          if (adminsError) throw new Error(`Could not load admins for manual routing: ${adminsError.message}`);
+
+          if (admins && admins.length > 0) {
+            const { error: adminNotificationError } = await dbClient.from('notifications').insert(
+              admins.map((admin) => ({
+                user_id: admin.user_id,
+                title: 'Manual Assignment Needed',
+                message: `Project "${project.title}" matched the ${projectCategory} category, but no qualified supervisor with available capacity could be scored for routing. Please assign manually.`,
+                type: 'allocation',
+                link: `/projects/${projectId}`,
+              }))
+            );
+
+            if (adminNotificationError) throw new Error(`Could not notify admins: ${adminNotificationError.message}`);
+          }
+
+          return new Response(
+            JSON.stringify({ success: true, allocated: false, message: 'No qualified supervisor with available capacity could be routed.' }),
+            { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
+
+        scoredMatches.sort((a, b) => b.score - a.score);
+        const bestMatch = scoredMatches[0];
+
+        errorStage = 'load_supervisor_profiles';
+        const supervisorIds = scoredMatches.map(({ supervisor }) => supervisor.user_id);
+        const { data: supervisorProfiles, error: supervisorProfilesError } = await dbClient
+          .from('profiles')
+          .select('user_id, full_name')
+          .in('user_id', supervisorIds);
+
+        if (supervisorProfilesError) throw new Error(`Could not load supervisor profiles: ${supervisorProfilesError.message}`);
+
+        const supervisorNameMap = new Map((supervisorProfiles || []).map((profile: any) => [profile.user_id, profile.full_name || 'Unknown supervisor']));
+        const supervisorNames = scoredMatches.map(({ supervisor }) => supervisorNameMap.get(supervisor.user_id) || 'Unknown supervisor');
+
+        errorStage = 'create_pending_allocations';
+        const { error: allocError } = await dbClient
+          .from('pending_allocations')
+          .insert(scoredMatches.map((match) => ({
+            project_id: projectId,
+            supervisor_id: match.supervisor.user_id,
+            match_score: match.score,
+            match_reason: `${match.reasons.join(', ')} • Routed for ${projectCategory}`,
+            status: 'pending',
+          })));
+
+        if (allocError) throw new Error(`Could not create pending allocations: ${allocError.message}`);
+
+        errorStage = 'notify_supervisors';
+        const { error: supervisorNotificationError } = await dbClient
           .from('notifications')
-          .insert({
+          .insert(scoredMatches.map((match) => ({
             user_id: match.supervisor.user_id,
             title: 'New Project Submission',
             message: `A new ${projectCategory} project "${project.title}" matches your expertise and has been routed to you for review by the system (${match.score}% match).`,
             type: 'allocation',
-            link: `/projects/${projectId}`
-          });
-      }
+            link: `/projects/${projectId}`,
+          })));
 
-      if (project.student_id) {
-        await supabaseClient
-          .from('notifications')
-          .insert({
-            user_id: project.student_id,
-            title: 'Project Submitted',
-            message: `Your project "${project.title}" has been submitted to ${supervisorNames.join(', ')} for review based on the ${projectCategory} category.`,
-            type: 'allocation',
-            link: `/projects/${projectId}`
-          });
-      }
+        if (supervisorNotificationError) throw new Error(`Could not notify supervisors: ${supervisorNotificationError.message}`);
 
-      return new Response(
-        JSON.stringify({
-          success: true,
-          allocated: true,
-          supervisorName: supervisorNameMap.get(bestMatch.supervisor.user_id) || 'Unknown supervisor',
-          supervisorNames,
-          matchScore: bestMatch?.score || 0,
-          matchReason: bestMatch?.reasons.join(', ') || '',
-          breakdown: bestMatch?.breakdown,
-          notifiedSupervisors: scoredMatches.length,
-        }),
-        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+        if (project.student_id) {
+          errorStage = 'notify_student';
+          const { error: studentNotificationError } = await dbClient
+            .from('notifications')
+            .insert({
+              user_id: project.student_id,
+              title: 'Project Submitted',
+              message: `Your project "${project.title}" has been submitted to ${supervisorNames.join(', ')} for review based on the ${projectCategory} category.`,
+              type: 'allocation',
+              link: `/projects/${projectId}`
+            });
+
+          if (studentNotificationError) throw new Error(`Could not notify student: ${studentNotificationError.message}`);
+        }
+
+        return new Response(
+          JSON.stringify({
+            success: true,
+            allocated: true,
+            supervisorName: supervisorNameMap.get(bestMatch.supervisor.user_id) || 'Unknown supervisor',
+            supervisorNames,
+            matchScore: bestMatch?.score || 0,
+            matchReason: bestMatch?.reasons.join(', ') || '',
+            breakdown: bestMatch?.breakdown,
+            notifiedSupervisors: scoredMatches.length,
+          }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      } catch (allocationError) {
+        const message = getErrorMessage(allocationError);
+        console.error('Auto-allocation failed:', { projectId, errorStage, message, allocationError });
+
+        return new Response(
+          JSON.stringify({ success: false, allocated: false, error: message, stage: errorStage }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
     }
 
     // ─── Approve Project ────────────────────────────────────────────────────────
@@ -1532,11 +1578,11 @@ serve(async (req) => {
     throw new Error('Invalid action');
 
   } catch (error) {
-    const message = error instanceof Error ? error.message : typeof error === 'string' ? error : JSON.stringify(error) || 'Unknown error';
+    const message = getErrorMessage(error);
     console.error('Error:', message, error);
     return new Response(
-      JSON.stringify({ error: message }),
-      { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 400 }
+      JSON.stringify({ success: false, error: message }),
+      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   }
 });
